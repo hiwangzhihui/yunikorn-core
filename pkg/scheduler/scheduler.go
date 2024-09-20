@@ -68,6 +68,7 @@ func (s *Scheduler) StartService(handlers handler.EventHandlers, manualSchedule 
 	s.healthChecker.Start()
 
 	if !manualSchedule {
+		//core 调度核心入口
 		go s.internalSchedule()
 		go s.internalInspectOutstandingRequests()
 	}

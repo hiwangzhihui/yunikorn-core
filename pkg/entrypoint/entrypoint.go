@@ -80,6 +80,7 @@ func startAllServicesWithParameters(opts startupOptions) *ServiceContext {
 	events.GetEventSystem().StartService()
 
 	sched := scheduler.NewScheduler()
+	//RMProxyEventHandler 包装了  SchedulerEventHandler
 	proxy := rmproxy.NewRMProxy(sched)
 	eventHandler := handler.EventHandlers{
 		SchedulerEventHandler: sched,
@@ -88,11 +89,12 @@ func startAllServicesWithParameters(opts startupOptions) *ServiceContext {
 
 	// start services
 	log.Log(log.Entrypoint).Info("ServiceContext start scheduling services")
+	//RMProxyEventHandler、RMProxyEventHandler 初始化启动
 	sched.StartService(eventHandler, opts.manualScheduleFlag)
 	proxy.StartService()
 
 	context := &ServiceContext{
-		RMProxy:   proxy,
+		RMProxy:   proxy, //与 core 交互的依赖代理，RPC 不会启用
 		Scheduler: sched,
 	}
 

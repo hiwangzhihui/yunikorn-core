@@ -39,12 +39,13 @@ import (
 
 // Gateway to talk to ResourceManager (behind grpc/API of scheduler-interface)
 type RMProxy struct {
+	//core 调度 Handler
 	schedulerEventHandler handler.EventHandler // read-only, no lock needed to access it
 	stop                  chan struct{}
 
 	// Internal fields
 	pendingRMEvents chan interface{}
-
+	//由 K8s Shim 注册 AsyncRMCallback
 	rmIDToCallback map[string]api.ResourceManagerCallback
 
 	locking.RWMutex
@@ -116,7 +117,9 @@ func (rmp *RMProxy) processApplicationUpdateEvent(event *rmevent.RMApplicationUp
 		Accepted: event.AcceptedApplications,
 		Updated:  event.UpdatedApplications,
 	}
+	//调用 AsyncRMCallback
 	if callback := rmp.GetResourceManagerCallback(event.RmID); callback != nil {
+		//AsyncRMCallback
 		if err := callback.UpdateApplication(response); err != nil {
 			rmp.handleUpdateResponseError(event.RmID, err)
 		}
@@ -184,6 +187,7 @@ func (rmp *RMProxy) processRMNodeUpdateEvent(event *rmevent.RMNodeUpdateEvent) {
 	}
 }
 
+// 从 pendingRMEvents 读取事件异步处理，Todo 不会进入该逻辑，由 Scheduler 处理 pendingRMEvents
 func (rmp *RMProxy) handleRMEvents() {
 	for {
 		select {
@@ -295,7 +299,7 @@ func (rmp *RMProxy) UpdateApplication(request *si.ApplicationRequest) error {
 	for _, app := range request.Remove {
 		app.PartitionName = common.GetNormalizedPartitionName(app.PartitionName, request.RmID)
 	}
-
+	//将 request 包装为 RMUpdateApplicationEvent 事件，添加到 pendingRMEvents 队列中异步处理
 	rmp.schedulerEventHandler.HandleEvent(&rmevent.RMUpdateApplicationEvent{Request: request})
 	return nil
 }

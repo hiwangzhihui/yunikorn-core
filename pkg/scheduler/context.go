@@ -120,6 +120,7 @@ func (cc *ClusterContext) setEventHandler(rmHandler handler.EventHandler) {
 func (cc *ClusterContext) schedule() bool {
 	// schedule each partition defined in the cluster
 	activity := false
+	//按照 Partition 调度
 	for _, psc := range cc.GetPartitionMapClone() {
 		// if there are no resources in the partition just skip
 		if psc.root.GetMaxResource() == nil {
@@ -521,6 +522,7 @@ func (cc *ClusterContext) handleRMUpdateApplicationEvent(event *rmevent.RMUpdate
 			continue
 		}
 		// create a new app object and add it to the partition (partition logs details)
+		//创建一个 schedApp ，并添加到对应的 partition 中
 		schedApp := objects.NewApplication(app, ugi, cc.rmEventHandler, request.RmID)
 		if err = partition.AddApplication(schedApp); err != nil {
 			rejectedApps = append(rejectedApps, &si.RejectedApplication{
