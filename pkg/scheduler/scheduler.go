@@ -34,7 +34,8 @@ import (
 
 // Main Scheduler service that starts the needed sub services
 type Scheduler struct {
-	clusterContext  *ClusterContext  // main context
+	clusterContext *ClusterContext // main context
+	//事件队列
 	pendingEvents   chan interface{} // queue for events
 	activityPending chan bool        // activity pending channel
 	stop            chan struct{}    // channel to signal stop request

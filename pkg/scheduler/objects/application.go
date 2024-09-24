@@ -84,14 +84,17 @@ type Application struct {
 	tags           map[string]string // application tags used in scheduling
 
 	// Private mutable fields need protection
-	queuePath         string
-	queue             *Queue                  // queue the application is running in
-	pending           *resources.Resource     // pending resources from asks for the app
-	reservations      map[string]*reservation // a map of reservations
-	requests          map[string]*Allocation  // a map of allocations, pending or satisfied
-	sortedRequests    sortedRequests          // list of requests pre-sorted
-	user              security.UserGroup      // owner of the application
-	allocatedResource *resources.Resource     // total allocated resources
+	queuePath    string
+	queue        *Queue                  // queue the application is running in
+	pending      *resources.Resource     // pending resources from asks for the app
+	reservations map[string]*reservation // a map of reservations
+	//core 记录的资源请求
+	requests map[string]*Allocation // a map of allocations, pending or satisfied
+	//资源请求排序列表
+	sortedRequests sortedRequests     // list of requests pre-sorted
+	user           security.UserGroup // owner of the application
+	//已经请求到的资源
+	allocatedResource *resources.Resource // total allocated resources
 
 	usedResource        *resources.TrackedResource // keep track of resource usage of the application
 	preemptedResource   *resources.TrackedResource // keep track of preempted resource usage of the application
@@ -606,6 +609,7 @@ func (sa *Application) removeAsksInternal(allocKey string, detail si.EventRecord
 	// When the resource trackers are zero we should not expect anything to come in later.
 	hasPlaceHolderAllocations := len(sa.getPlaceholderAllocations()) > 0
 	if resources.IsZero(sa.pending) && resources.IsZero(sa.allocatedResource) && !sa.IsFailing() && !sa.IsCompleting() && !hasPlaceHolderAllocations {
+		//如果 App 没有资源需求，同时 allocatedResource  都释放，且不存在资源预留则触发 CompleteApplication 事件
 		if err := sa.HandleApplicationEvent(CompleteApplication); err != nil {
 			log.Log(log.SchedApplication).Warn("Application state not changed to Completing while updating ask(s)",
 				zap.String("currentState", sa.CurrentState()),
@@ -623,6 +627,7 @@ func (sa *Application) removeAsksInternal(allocKey string, detail si.EventRecord
 
 // Add an allocation ask to this application
 // If the ask already exist update the existing info
+// 请资源请求 ask 在 app 中登记
 func (sa *Application) AddAllocationAsk(ask *Allocation) error {
 	sa.Lock()
 	defer sa.Unlock()
@@ -643,6 +648,7 @@ func (sa *Application) AddAllocationAsk(ask *Allocation) error {
 	// 1) first ask added on a new app: state is New
 	// 2) all asks and allocation have been removed: state is Completing
 	// Move the state and get it scheduling (again)
+	//app 状态检查，如实是 New 或 Completing 状态不会为其调度
 	if sa.stateMachine.Is(New.String()) || sa.stateMachine.Is(Completing.String()) {
 		if err := sa.HandleApplicationEvent(RunApplication); err != nil {
 			log.Log(log.SchedApplication).Debug("Application state change failed while adding new ask",
@@ -654,6 +660,7 @@ func (sa *Application) AddAllocationAsk(ask *Allocation) error {
 
 	// Update total pending resource
 	delta.SubFrom(oldAskResource)
+	//pending 资源统计
 	sa.pending = resources.Add(sa.pending, delta)
 	sa.pending.Prune()
 	sa.queue.incPendingResource(delta)
@@ -664,7 +671,9 @@ func (sa *Application) AddAllocationAsk(ask *Allocation) error {
 		zap.String("ask", ask.GetAllocationKey()),
 		zap.Bool("placeholder", ask.IsPlaceholder()),
 		zap.Stringer("pendingDelta", delta))
+	//加入到资源请求排序列表中
 	sa.sortedRequests.insert(ask)
+	//添加 APP 事件记录
 	sa.appEvents.SendNewAskEvent(sa.ApplicationID, ask.allocationKey, ask.GetAllocatedResource())
 
 	return nil
@@ -752,6 +761,7 @@ func (sa *Application) RecoverAllocationAsk(alloc *Allocation) {
 }
 
 func (sa *Application) addAllocationAskInternal(ask *Allocation) {
+	//添加到 requests 列表中
 	sa.requests[ask.GetAllocationKey()] = ask
 
 	// update app priority
@@ -1037,16 +1047,19 @@ func (sa *Application) tryAllocate(headRoom *resources.Resource, allowPreemption
 		// check if this fits in the users' headroom first, if that fits check the queues' headroom
 		// NOTE: preemption most likely will not help in this case. The chance that preemption helps is mall
 		// as the preempted allocation must be for the same user in a different queue in the hierarchy...
+		//检查使用超过用户资源使用上限
 		if !userHeadroom.FitInMaxUndef(request.GetAllocatedResource()) {
+			//todo 页面或日志显示调度失败归因
 			request.LogAllocationFailure(NotEnoughUserQuota, true) // error message MUST be constant!
 			request.setUserQuotaCheckFailed(userHeadroom)
 			continue
 		}
+		//标记当前请求通过了用户资源检查
 		request.setUserQuotaCheckPassed()
 		request.SetSchedulingAttempted(true)
 
 		// resource must fit in headroom otherwise skip the request (unless preemption could help)
-		if !headRoom.FitInMaxUndef(request.GetAllocatedResource()) {
+		if !headRoom.FitInMaxUndef(request.GetAllocatedResource()) { //检查是否超过队列资源上限
 			// attempt preemption
 			if allowPreemption && *preemptAttemptsRemaining > 0 {
 				*preemptAttemptsRemaining--
@@ -1063,11 +1076,11 @@ func (sa *Application) tryAllocate(headRoom *resources.Resource, allowPreemption
 			request.setHeadroomCheckFailed(headRoom, sa.queuePath)
 			continue
 		}
-		request.setHeadroomCheckPassed(sa.queuePath)
+		request.setHeadroomCheckPassed(sa.queuePath) //标记队列资源检查通过
 
 		requiredNode := request.GetRequiredNode()
 		// does request have any constraint to run on specific node?
-		if requiredNode != "" {
+		if requiredNode != "" { //特定节点资源调度需求
 			// the iterator might not have the node we need as it could be reserved, or we have not added it yet
 			node := getNodeFn(requiredNode)
 			if node == nil {
@@ -1108,6 +1121,7 @@ func (sa *Application) tryAllocate(headRoom *resources.Resource, allowPreemption
 
 		iterator := nodeIterator()
 		if iterator != nil {
+			//遍历所有节点，满足资源需求
 			if result := sa.tryNodes(request, iterator); result != nil {
 				// have a candidate return it
 				return result
@@ -1482,16 +1496,16 @@ func (sa *Application) tryNodes(ask *Allocation, iterator NodeIterator) *Allocat
 	allowReserve := !ask.IsAllocated() && len(reservedAsks) == 0
 	var allocResult *AllocationResult
 	var predicateErrors map[string]int
-	iterator.ForEachNode(func(node *Node) bool {
+	iterator.ForEachNode(func(node *Node) bool { //遍历所有节点
 		// skip the node if the node is not valid for the ask
-		if !node.IsSchedulable() {
+		if !node.IsSchedulable() { //节点是否允许调度
 			log.Log(log.SchedApplication).Debug("skipping node for ask as state is unschedulable",
 				zap.String("allocationKey", allocKey),
 				zap.String("node", node.NodeID))
 			return true
 		}
 		// skip over the node if the resource does not fit the node at all.
-		if !node.FitInNode(ask.GetAllocatedResource()) {
+		if !node.FitInNode(ask.GetAllocatedResource()) { //资源规格是否匹配
 			return true
 		}
 		tryNodeStart := time.Now()
@@ -1582,18 +1596,20 @@ func (sa *Application) tryNodes(ask *Allocation, iterator NodeIterator) *Allocat
 // Try allocating on one specific node
 func (sa *Application) tryNode(node *Node, ask *Allocation) (*AllocationResult, error) {
 	toAllocate := ask.GetAllocatedResource()
-	// create the key for the reservation
+	// create the key for the reservation  节点资源预备检查，todo 与上层逻辑重复？ 资源预留香港
 	if !node.preAllocateCheck(toAllocate, reservationKey(nil, sa, ask)) {
 		// skip schedule onto node
 		return nil, nil
 	}
 	// skip the node if conditions can not be satisfied
+	//使用预先插件检查，todo 待验证如何配置,为什么不放在外面逻辑
 	if err := node.preAllocateConditions(ask); err != nil {
 		return nil, err
 	}
 
 	// everything OK really allocate
-	if node.TryAddAllocation(ask) {
+	if node.TryAddAllocation(ask) { //资源申请逻辑上变更
+		//跟更新队列资源
 		if err := sa.queue.TryIncAllocatedResource(ask.GetAllocatedResource()); err != nil {
 			log.Log(log.SchedApplication).DPanic("queue update failed unexpectedly",
 				zap.Error(err))
@@ -1602,7 +1618,7 @@ func (sa *Application) tryNode(node *Node, ask *Allocation) (*AllocationResult, 
 			return nil, nil
 		}
 		// mark this ask as allocated
-		_, err := sa.allocateAsk(ask)
+		_, err := sa.allocateAsk(ask) //标记资源已申请成功，并从 Pending 资源中移除
 		if err != nil {
 			log.Log(log.SchedApplication).Warn("allocation of ask failed unexpectedly",
 				zap.Error(err))
@@ -1747,6 +1763,7 @@ func (sa *Application) addAllocationInternal(allocType AllocationResultType, all
 		// already when the last placeholder was allocated
 		// special case COMPLETING: gang with only one placeholder moves to COMPLETING and causes orphaned
 		// allocations
+		//allocType 不是 Replaced  或 allocatedResource 不为空 或  app 状态为 Completing，则 App 状态更新为 Running
 		if allocType != Replaced || !resources.IsZero(sa.allocatedResource) || sa.IsCompleting() {
 			// progress the state based on where we are, we should never fail in this case
 			// keep track of a failure in log.
@@ -1756,7 +1773,9 @@ func (sa *Application) addAllocationInternal(allocType AllocationResultType, all
 					zap.Error(err))
 			}
 		}
+		//app 资源统计
 		sa.incUserResourceUsage(alloc.GetAllocatedResource())
+		//添加到已申请资源列表
 		sa.allocatedResource = resources.Add(sa.allocatedResource, alloc.GetAllocatedResource())
 		sa.maxAllocatedResource = resources.ComponentWiseMax(sa.allocatedResource, sa.maxAllocatedResource)
 	}

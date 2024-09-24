@@ -29,6 +29,7 @@ import (
 
 func sortQueue(queues []*Queue, fairMaxResources []*resources.Resource, sortType policies.SortPolicy, considerPriority bool) {
 	sortingStart := time.Now()
+	//根据调度策略进行排序
 	if sortType == policies.FairSortPolicy {
 		if considerPriority {
 			sortQueuesByPriorityAndFairness(queues, fairMaxResources)
@@ -40,6 +41,7 @@ func sortQueue(queues []*Queue, fairMaxResources []*resources.Resource, sortType
 			sortQueuesByPriority(queues)
 		}
 	}
+	//更新排序耗时
 	metrics.GetSchedulerMetrics().ObserveQueueSortingLatency(sortingStart)
 }
 
@@ -103,7 +105,7 @@ func sortApplications(apps map[string]*Application, sortType policies.SortPolicy
 	var sortedApps []*Application
 	switch sortType {
 	case policies.FairSortPolicy:
-		sortedApps = filterOnPendingResources(apps)
+		sortedApps = filterOnPendingResources(apps) //TODO 待优化
 		if considerPriority {
 			sortApplicationsByPriorityAndFairness(sortedApps, globalResource)
 		} else {

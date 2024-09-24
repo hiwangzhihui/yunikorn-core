@@ -53,12 +53,13 @@ type Queue struct {
 	QueuePath string // Fully qualified path for the queue
 	Name      string // Queue name as in the config etc.
 
-	// Private fields need protection
-	sortType            policies.SortPolicy       // How applications (leaf) or queues (parents) are sorted
-	children            map[string]*Queue         // Only for direct children, parent queue only
-	childPriorities     map[string]int32          // cached priorities for child queues
-	applications        map[string]*Application   // only for leaf queue
-	appPriorities       map[string]int32          // cached priorities for application
+	// Private fields need protection TODO 队列之间从代码层面来看是公平策略
+	sortType        policies.SortPolicy     // How applications (leaf) or queues (parents) are sorted
+	children        map[string]*Queue       // Only for direct children, parent queue only
+	childPriorities map[string]int32        // cached priorities for child queues
+	applications    map[string]*Application // only for leaf queue
+	appPriorities   map[string]int32        // cached priorities for application
+	//记录了在队列中保留的 APP 个和个数
 	reservedApps        map[string]int            // applications reserved within this queue, with reservation count
 	parent              *Queue                    // link back to the parent in the scheduler
 	pending             *resources.Resource       // pending resource for the apps in the queue
@@ -1197,11 +1198,11 @@ func (sq *Queue) sortQueues() []*Queue {
 	sortedMaxFairResources := make([]*resources.Resource, 0)
 	for _, child := range sq.GetCopyOfChildren() {
 		// a stopped queue cannot be scheduled
-		if child.IsStopped() {
+		if child.IsStopped() { //停用子的子队列，不参与调度与排序
 			continue
 		}
 		// queue must have pending resources to be considered for scheduling
-		if resources.StrictlyGreaterThanZero(child.GetPendingResource()) {
+		if resources.StrictlyGreaterThanZero(child.GetPendingResource()) { //如果没有资源需求，不参与调度
 			sortedQueues = append(sortedQueues, child)
 			sortedMaxFairResources = append(sortedMaxFairResources, child.GetFairMaxResource())
 		}
@@ -1395,7 +1396,7 @@ func (sq *Queue) canRunApp(appID string) bool {
 	}
 	sq.Lock()
 	defer sq.Unlock()
-	// if we do not have a max set or this app is already tracked proceed
+	// if we do not have a max set or this app is already tracked proceed , 如果超过最多 APP 个数则停止对该 APP 调度
 	if sq.maxRunningApps == 0 || sq.allocatingAcceptedApps[appID] {
 		return true
 	}
@@ -1410,17 +1411,18 @@ func (sq *Queue) canRunApp(appID string) bool {
 // Applications are sorted based on the application sortPolicy. Applications without pending resources are skipped.
 // Lock free call this all locks are taken when needed in called functions
 func (sq *Queue) TryAllocate(iterator func() NodeIterator, fullIterator func() NodeIterator, getnode func(string) *Node, allowPreemption bool) *AllocationResult {
-	if sq.IsLeafQueue() {
+	if sq.IsLeafQueue() { //子队列调度
 		// get the headroom
 		headRoom := sq.getHeadRoom()
 		preemptionDelay := sq.GetPreemptionDelay()
 		preemptAttemptsRemaining := maxPreemptionsPerQueue
 
 		// process the apps (filters out app without pending requests)
-		for _, app := range sq.sortApplications(false) {
+		for _, app := range sq.sortApplications(false) { //子任务排序
 			runnableInQueue := sq.canRunApp(app.ApplicationID)
 			runnableByUserLimit := ugm.GetUserManager().CanRunApp(sq.QueuePath, app.ApplicationID, app.user)
 			app.updateRunnableStatus(runnableInQueue, runnableByUserLimit)
+			//队列和用户提交任务个数限制，行为不够优雅，是否能与 Yarn 对齐 ，或添加调度失败归因
 			if app.IsAccepted() && (!runnableInQueue || !runnableByUserLimit) {
 				continue
 			}
@@ -1439,7 +1441,7 @@ func (sq *Queue) TryAllocate(iterator func() NodeIterator, fullIterator func() N
 				return result
 			}
 		}
-	} else {
+	} else { //排序后递归调度
 		// process the child queues (filters out queues without pending requests)
 		for _, child := range sq.sortQueues() {
 			result := child.TryAllocate(iterator, fullIterator, getnode, allowPreemption)
@@ -1507,11 +1509,12 @@ func (sq *Queue) GetQueueOutstandingRequests(total *[]*Allocation) {
 // the configured queue sortPolicy. Queues without pending resources are skipped.
 // Applications are currently NOT sorted and are iterated over in a random order.
 // Lock free call this all locks are taken when needed in called functions
+// NodeIterator 节点资源列表
 func (sq *Queue) TryReservedAllocate(iterator func() NodeIterator) *AllocationResult {
-	if sq.IsLeafQueue() {
+	if sq.IsLeafQueue() { //子队列进入该逻辑
 		// skip if it has no reservations
 		reservedCopy := sq.GetReservedApps()
-		if len(reservedCopy) != 0 {
+		if len(reservedCopy) != 0 { //
 			// get the headroom
 			headRoom := sq.getHeadRoom()
 			// process the apps
@@ -1549,8 +1552,10 @@ func (sq *Queue) TryReservedAllocate(iterator func() NodeIterator) *AllocationRe
 			}
 		}
 	} else {
+		// 没有资源预留可正常调度
+		//
 		// process the child queues (filters out queues that have no pending requests)
-		for _, child := range sq.sortQueues() {
+		for _, child := range sq.sortQueues() { //排序后 fair 策略算法调研//TODO
 			result := child.TryReservedAllocate(iterator)
 			if result != nil {
 				return result

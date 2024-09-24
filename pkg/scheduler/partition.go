@@ -818,6 +818,7 @@ func (pc *PartitionContext) tryReservedAllocate() *objects.AllocationResult {
 	if pc.getReservationCount() == 0 {
 		return nil
 	}
+	//如果 root  队列没有资源需求，则返回
 	if !resources.StrictlyGreaterThanZero(pc.root.GetPendingResource()) {
 		// nothing to do just return
 		return nil
@@ -1143,11 +1144,12 @@ func (pc *PartitionContext) UpdateAllocation(alloc *objects.Allocation) (request
 		metrics.GetSchedulerMetrics().IncSchedulingError()
 		return false, false, fmt.Errorf("failed to find application %s", applicationID)
 	}
+	//获取 App 所在队列
 	queue := app.GetQueue()
 
 	// find node if one is specified
-	var node *objects.Node = nil
-	allocated := alloc.IsAllocated()
+	var node *objects.Node = nil     //申请到的资源节点
+	allocated := alloc.IsAllocated() //资源申请成功标志
 	if allocated {
 		node = pc.GetNode(alloc.GetNodeID())
 		if node == nil {
@@ -1161,12 +1163,13 @@ func (pc *PartitionContext) UpdateAllocation(alloc *objects.Allocation) (request
 		metrics.GetSchedulerMetrics().IncSchedulingError()
 		return false, false, fmt.Errorf("allocation contains no resources")
 	}
-	if !resources.StrictlyGreaterThanZero(res) {
+
+	if !resources.StrictlyGreaterThanZero(res) { //资源单位校验
 		metrics.GetSchedulerMetrics().IncSchedulingError()
 		return false, false, fmt.Errorf("allocation contains negative resources")
 	}
 
-	// check to see if allocation exists already on app
+	// check to see if allocation exists already on app  判断当前资源请求，是否已经登记到 coreApp 中了
 	existing := app.GetAllocationAsk(allocationKey)
 
 	// handle new allocation
@@ -1177,7 +1180,7 @@ func (pc *PartitionContext) UpdateAllocation(alloc *objects.Allocation) (request
 				zap.String("partitionName", pc.Name),
 				zap.String("appID", applicationID),
 				zap.String("allocationKey", allocationKey))
-
+			//将资源请求加入到
 			if err := app.AddAllocationAsk(alloc); err != nil {
 				log.Log(log.SchedPartition).Info("failed to add request",
 					zap.String("partitionName", pc.Name),

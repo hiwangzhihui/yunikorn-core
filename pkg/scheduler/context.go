@@ -45,7 +45,7 @@ const disableReservation = "DISABLE_RESERVATION"
 type ClusterContext struct {
 	partitions     map[string]*PartitionContext
 	policyGroup    string
-	rmEventHandler handler.EventHandler
+	rmEventHandler handler.EventHandler //RMProxyEventHandler
 	uuid           string
 
 	// config values that change scheduling behaviour
@@ -132,21 +132,25 @@ func (cc *ClusterContext) schedule() bool {
 		}
 		// try reservations first
 		schedulingStart := time.Now()
+		//TODO 资源预留，这段逻辑看起来进去不
+		//https://issues.apache.org/jira/browse/YUNIKORN-1886
 		result := psc.tryReservedAllocate()
 		if result == nil {
 			// placeholder replacement second
-			result = psc.tryPlaceholderAllocate()
+			result = psc.tryPlaceholderAllocate() // 先开始进行分配资源预占，与优先级冲突
 			// nothing reserved that can be allocated try normal allocate
 			if result == nil {
-				result = psc.tryAllocate()
+				result = psc.tryAllocate() //正常调度逻辑
 			}
 		}
 		if result != nil {
+			//指标统计
 			metrics.GetSchedulerMetrics().ObserveSchedulingLatency(schedulingStart)
 			if result.ResultType == objects.Replaced {
 				// communicate the removal to the RM
 				cc.notifyRMAllocationReleased(psc.RmID, psc.Name, []*objects.Allocation{result.Request.GetRelease()}, si.TerminationType_PLACEHOLDER_REPLACED, "replacing allocationKey: "+result.Request.GetAllocationKey())
 			} else {
+				//调度成功，发送通知，回调 Shim   , Allocated
 				cc.notifyRMNewAllocation(psc.RmID, result.Request)
 			}
 			activity = true
@@ -497,6 +501,7 @@ func (cc *ClusterContext) handleRMUpdateApplicationEvent(event *rmevent.RMUpdate
 		partition := cc.GetPartition(app.PartitionName)
 		if partition == nil {
 			msg := fmt.Sprintf("Failed to add application %s to partition %s, partition doesn't exist", app.ApplicationID, app.PartitionName)
+			//不符合配置要求，被拒绝的 app
 			rejectedApps = append(rejectedApps, &si.RejectedApplication{
 				ApplicationID: app.ApplicationID,
 				Reason:        msg,
@@ -536,6 +541,7 @@ func (cc *ClusterContext) handleRMUpdateApplicationEvent(event *rmevent.RMUpdate
 				zap.Error(err))
 			continue
 		}
+		//acceptedApps 为通过校验接收的 app
 		acceptedApps = append(acceptedApps, &si.AcceptedApplication{
 			ApplicationID: schedApp.ApplicationID,
 		})
@@ -547,16 +553,17 @@ func (cc *ClusterContext) handleRMUpdateApplicationEvent(event *rmevent.RMUpdate
 	}
 
 	// Respond to RMProxy with accepted and rejected apps if needed
+	//如果 acceptedApps 、rejectedApps 需要处理则，进入下一个流程
 	if len(rejectedApps) > 0 || len(acceptedApps) > 0 {
 		cc.rmEventHandler.HandleEvent(
-			&rmevent.RMApplicationUpdateEvent{
+			&rmevent.RMApplicationUpdateEvent{ //交个 RMProxy 处理
 				RmID:                 request.RmID,
 				AcceptedApplications: acceptedApps,
 				RejectedApplications: rejectedApps,
 			})
 	}
-	// Update metrics with removed applications
-	if len(request.Remove) > 0 {
+	// Update metrics with removed applications  删除流程
+	if len(request.Remove) > 0 { // 即将要删除的 app 列表
 		for _, app := range request.Remove {
 			partition := cc.GetPartition(app.PartitionName)
 			if partition == nil {
@@ -711,6 +718,7 @@ func (cc *ClusterContext) updateNode(nodeInfo *si.NodeInfo) {
 func (cc *ClusterContext) handleRMUpdateAllocationEvent(event *rmevent.RMUpdateAllocationEvent) {
 	request := event.Request
 	if len(request.Allocations) != 0 {
+		//开始资源调度
 		cc.processAllocations(request)
 	}
 	if request.Releases != nil {

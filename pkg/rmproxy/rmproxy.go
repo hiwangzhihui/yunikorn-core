@@ -43,9 +43,10 @@ type RMProxy struct {
 	schedulerEventHandler handler.EventHandler // read-only, no lock needed to access it
 	stop                  chan struct{}
 
-	// Internal fields
+	// Internal fields   RMProxy 内部的事件
 	pendingRMEvents chan interface{}
-	//由 K8s Shim 注册 AsyncRMCallback
+	//由 K8s Shim 注册 AsyncRMCallback,
+	//Key 为 ClusterId ，value 为不同 Shim 的注册回调函数，为终态预留接口
 	rmIDToCallback map[string]api.ResourceManagerCallback
 
 	locking.RWMutex
@@ -96,7 +97,7 @@ func (rmp *RMProxy) processAllocationUpdateEvent(event *rmevent.RMNewAllocations
 	allocationsCount := len(event.Allocations)
 	if allocationsCount != 0 {
 		response := &si.AllocationResponse{
-			New: event.Allocations,
+			New: event.Allocations, //New 状态的 response
 		}
 		rmp.triggerUpdateAllocation(event.RmID, response)
 		metrics.GetSchedulerMetrics().AddAllocatedContainers(len(event.Allocations))
@@ -119,7 +120,7 @@ func (rmp *RMProxy) processApplicationUpdateEvent(event *rmevent.RMApplicationUp
 	}
 	//调用 AsyncRMCallback
 	if callback := rmp.GetResourceManagerCallback(event.RmID); callback != nil {
-		//AsyncRMCallback
+		//AsyncRMCallback 将响应结果回调给 Shim
 		if err := callback.UpdateApplication(response); err != nil {
 			rmp.handleUpdateResponseError(event.RmID, err)
 		}
@@ -281,6 +282,7 @@ func (rmp *RMProxy) UpdateAllocation(request *si.AllocationRequest) error {
 			rel.PartitionName = common.GetNormalizedPartitionName(rel.PartitionName, request.RmID)
 		}
 	}
+	//交给 Core scheduler 处理
 	rmp.schedulerEventHandler.HandleEvent(&rmevent.RMUpdateAllocationEvent{Request: request})
 	return nil
 }
