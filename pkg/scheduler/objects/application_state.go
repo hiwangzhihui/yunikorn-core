@@ -236,6 +236,7 @@ func callbacks() fsm.Callbacks {
 		},
 		fmt.Sprintf("enter_%s", Completing.String()): func(_ context.Context, event *fsm.Event) {
 			app := event.Args[0].(*Application) //nolint:errcheck
+			//设置一个定时器，如果超过该事件，就会把任务状态转换为  Completed ，默认 30s ，无调参 TODO
 			app.setStateTimer(completingTimeout, app.stateMachine.Current(), CompleteApplication)
 			metrics.GetQueueMetrics(app.queuePath).IncQueueApplicationsCompleting()
 			metrics.GetSchedulerMetrics().IncTotalApplicationsCompleting()
@@ -249,6 +250,7 @@ func callbacks() fsm.Callbacks {
 			app := event.Args[0].(*Application) //nolint:errcheck
 			metrics.GetSchedulerMetrics().IncTotalApplicationsCompleted()
 			metrics.GetQueueMetrics(app.queuePath).IncQueueApplicationsCompleted()
+			//任务信息默认保存 3 天，超过该时间就会被删除 TODO 无调参入口
 			app.setStateTimer(terminatedTimeout, app.stateMachine.Current(), ExpireApplication)
 			app.executeTerminatedCallback()
 			app.clearPlaceholderTimer()

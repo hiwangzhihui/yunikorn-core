@@ -452,6 +452,7 @@ func (sa *Application) timeoutPlaceholderProcessing() {
 		// change the status of the app based on gang style: soft resume normal allocations, hard fail the app
 		event := ResumeApplication
 		if sa.gangSchedulingStyle == Hard {
+			//gang 调度 Hard 模式，
 			event = FailApplication
 		}
 		if err := sa.HandleApplicationEventWithInfo(event, "ResourceReservationTimeout"); err != nil {

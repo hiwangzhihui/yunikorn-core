@@ -227,6 +227,7 @@ func (cc *ClusterContext) processRMConfigUpdateEvent(event *rmevent.RMConfigUpda
 		log.Log(log.SchedContext).Info("No scheduler configuration supplied, using defaults", zap.String("rmID", rmID))
 		config = configs.DefaultSchedulerConfig
 	}
+	//todo 检查并加载调度配置，加上监控告警。相关日志？
 	conf, err := configs.LoadSchedulerConfigFromByteArray([]byte(config))
 	if err != nil {
 		event.Channel <- &rmevent.Result{Succeeded: false, Reason: err.Error()}
