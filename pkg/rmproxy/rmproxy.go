@@ -39,7 +39,7 @@ import (
 
 // Gateway to talk to ResourceManager (behind grpc/API of scheduler-interface)
 type RMProxy struct {
-	//core 调度 Handler
+	//core 调度 Handler (Scheduler)
 	schedulerEventHandler handler.EventHandler // read-only, no lock needed to access it
 	stop                  chan struct{}
 
@@ -120,7 +120,7 @@ func (rmp *RMProxy) processApplicationUpdateEvent(event *rmevent.RMApplicationUp
 	}
 	//调用 AsyncRMCallback
 	if callback := rmp.GetResourceManagerCallback(event.RmID); callback != nil {
-		//AsyncRMCallback 将响应结果回调给 Shim
+		//AsyncRMCallback 将响应结果给 Shim
 		if err := callback.UpdateApplication(response); err != nil {
 			rmp.handleUpdateResponseError(event.RmID, err)
 		}
