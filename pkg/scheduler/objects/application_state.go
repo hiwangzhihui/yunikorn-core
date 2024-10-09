@@ -167,9 +167,11 @@ func callbacks() fsm.Callbacks {
 				app.appEvents.SendStateChangeEvent(app.ApplicationID, eventDetails, eventInfo)
 			}
 		},
+		//todo 硬编码
 		"leave_state": func(_ context.Context, event *fsm.Event) {
 			event.Args[0].(*Application).clearStateTimer() //nolint:errcheck
 		},
+		//todo 统一规范
 		fmt.Sprintf("leave_%s", New.String()): func(_ context.Context, event *fsm.Event) {
 			app := event.Args[0].(*Application) //nolint:errcheck
 			// only updated queue metrics because scheduler metrics are increased only for submission count
@@ -250,7 +252,7 @@ func callbacks() fsm.Callbacks {
 			app := event.Args[0].(*Application) //nolint:errcheck
 			metrics.GetSchedulerMetrics().IncTotalApplicationsCompleted()
 			metrics.GetQueueMetrics(app.queuePath).IncQueueApplicationsCompleted()
-			//任务信息默认保存 3 天，超过该时间就会被删除 TODO 无调参入口
+			//任务信息默认保存 3 天，超过该时间就会被删除 TODO 无调参入口，保留功能看起来无效，没必要每个任务都设置定时任务耗费线程资源
 			app.setStateTimer(terminatedTimeout, app.stateMachine.Current(), ExpireApplication)
 			app.executeTerminatedCallback()
 			app.clearPlaceholderTimer()
