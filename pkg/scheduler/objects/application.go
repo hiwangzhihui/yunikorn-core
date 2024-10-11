@@ -397,6 +397,7 @@ func (sa *Application) initPlaceholderTimer() {
 	log.Log(log.SchedApplication).Debug("Application placeholder timer initiated",
 		zap.String("AppID", sa.ApplicationID),
 		zap.Duration("Timeout", sa.execTimeout))
+	// App 设置了专门的线程去清理预占的资源
 	sa.placeholderTimer = time.AfterFunc(sa.execTimeout, sa.timeoutPlaceholderProcessing)
 }
 
