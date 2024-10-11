@@ -794,6 +794,7 @@ func (cc *ClusterContext) processAllocationReleases(releases []*si.AllocationRel
 				cc.notifyRMAllocationReleased(rmID, partition.Name, allocs, si.TerminationType_STOPPED_BY_RM, "allocation remove as per RM request")
 			}
 			// notify the RM of the confirmed allocations (placeholder swap & preemption)
+			//确认替换的资源通知到 Shim  (placeholder swap & preemption)
 			if confirmed != nil {
 				cc.notifyRMNewAllocation(rmID, confirmed)
 			}

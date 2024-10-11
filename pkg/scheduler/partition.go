@@ -1352,6 +1352,7 @@ func (pc *PartitionContext) generateReleased(release *si.AllocationRelease, app 
 			log.Log(log.SchedPartition).Info("replacing placeholder allocation",
 				zap.String("appID", app.ApplicationID),
 				zap.String("allocationKey", allocationKey))
+			//执行替换
 			if alloc := app.ReplaceAllocation(allocationKey); alloc != nil {
 				released = append(released, alloc)
 			}
@@ -1370,6 +1371,7 @@ func (pc *PartitionContext) generateReleased(release *si.AllocationRelease, app 
 
 // removeAllocation removes the referenced allocation(s) from the applications and nodes
 // NOTE: this is a lock free call. It must NOT be called holding the PartitionContext lock.
+// return : 返回值 1 成功删除的资源。返回值 2 成功替换需要通知 Shim 的资源
 func (pc *PartitionContext) removeAllocation(release *si.AllocationRelease) ([]*objects.Allocation, *objects.Allocation) { //nolint:funlen
 	if release == nil {
 		return nil, nil
@@ -1386,7 +1388,7 @@ func (pc *PartitionContext) removeAllocation(release *si.AllocationRelease) ([]*
 		return nil, nil
 	}
 
-	// temp store for allocations manipulated
+	// temp store for allocations manipulated 替换在这个逻辑中完成，App
 	released := pc.generateReleased(release, app)
 	var confirmed *objects.Allocation
 
@@ -1414,6 +1416,7 @@ func (pc *PartitionContext) removeAllocation(release *si.AllocationRelease) ([]*
 				zap.String("nodeID", alloc.GetNodeID()))
 			continue
 		}
+		//在释放 phTask 资源，并进行指标统计同步
 		if release.TerminationType == si.TerminationType_PLACEHOLDER_REPLACED {
 			confirmed = alloc.GetRelease()
 			// we need to check the resources equality
@@ -1434,6 +1437,7 @@ func (pc *PartitionContext) removeAllocation(release *si.AllocationRelease) ([]*
 			// replacements could be on a different node and different size handle all cases
 			if confirmed.GetNodeID() == alloc.GetNodeID() {
 				// this is the real swap on the node, adjust usage if needed
+				//删除  Node phPOd 资源统计信息
 				node.ReplaceAllocation(alloc.GetAllocationKey(), confirmed, delta)
 			} else {
 				// we have already added the real allocation to the new node, just remove the placeholder
@@ -1461,7 +1465,7 @@ func (pc *PartitionContext) removeAllocation(release *si.AllocationRelease) ([]*
 	// leave the resources as allocated on the queue. The queue cannot be removed yet at this point as
 	// there are still allocations left. So retrieve the queue early to sidestep the race.
 	queue := app.GetQueue()
-
+	//释放预占，队列资源扣减
 	if resources.StrictlyGreaterThanZero(total) {
 		if err := queue.DecAllocatedResource(total); err != nil {
 			log.Log(log.SchedPartition).Warn("failed to release resources from queue",

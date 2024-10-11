@@ -1218,6 +1218,7 @@ func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, 
 		for _, ph := range phAllocs {
 			// we could have already released preempted this placeholder and are waiting for the shim to confirm
 			// and check that we have the correct task group before trying to swap
+			//检查是否为同一个 TaskGroup 的资源和请求
 			if ph.IsReleased() || ph.IsPreempted() || request.GetTaskGroup() != ph.GetTaskGroup() {
 				continue
 			}
@@ -1227,6 +1228,7 @@ func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, 
 			// allocation is larger than the placeholder. We need to cancel this placeholder and check the next
 			// placeholder. This should trigger the removal of all the placeholder that are part of this task group.
 			// All placeholders in the same task group are always the same size.
+			//phTask 资源申请之前先，检查一下资源规格是否能满足需求。todo 不应该 Pending 住，应该 reject 让 任务失败
 			if delta.HasNegativeValue() {
 				log.Log(log.SchedApplication).Warn("releasing placeholder: real allocation is larger than placeholder",
 					zap.Stringer("requested resource", request.GetAllocatedResource()),
@@ -1234,6 +1236,7 @@ func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, 
 					zap.Stringer("placeholder resource", ph.GetAllocatedResource()))
 				// release the placeholder and tell the RM
 				ph.SetReleased(true)
+				//todo 不是 TerminationType_TIMEOUT 导致失败，不能乱填
 				sa.notifyRMAllocationReleased([]*Allocation{ph}, si.TerminationType_TIMEOUT, "cancel placeholder: resource incompatible")
 				sa.appEvents.SendPlaceholderLargerEvent(ph.taskGroupName, sa.ApplicationID, ph.allocationKey, request.GetAllocatedResource(), ph.GetAllocatedResource())
 				continue
@@ -1244,7 +1247,7 @@ func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, 
 				phFit = ph
 				reqFit = request
 			}
-			node := getNodeFn(ph.GetNodeID())
+			node := getNodeFn(ph.GetNodeID()) //ph已经分配到资源
 			// got the node run same checks as for reservation (all but fits)
 			// resource usage should not change anyway between placeholder and real one at this point
 			if node != nil && node.preReserveConditions(request) == nil {
@@ -1255,6 +1258,7 @@ func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, 
 				}
 				// double link to make it easier to find
 				// alloc (the real one) releases points to the placeholder in the releases list
+				//request pod 与 预占 Pod 相互绑定
 				request.SetRelease(ph)
 				// placeholder point to the real one in the releases list
 				ph.SetRelease(request)
@@ -1735,6 +1739,7 @@ func (sa *Application) AddAllocation(alloc *Allocation) {
 
 // Add the Allocation to the application
 // No locking must be called while holding the lock
+// 已经申请到资源进行逻辑统计扣减统计
 func (sa *Application) addAllocationInternal(allocType AllocationResultType, alloc *Allocation) {
 	// placeholder allocations do not progress the state of the app and are tracked in a separate total
 	if alloc.IsPlaceholder() {
@@ -1777,11 +1782,12 @@ func (sa *Application) addAllocationInternal(allocType AllocationResultType, all
 		}
 		//app 资源统计
 		sa.incUserResourceUsage(alloc.GetAllocatedResource())
-		//添加到已申请资源列表
+		//添加到已申请资量
 		sa.allocatedResource = resources.Add(sa.allocatedResource, alloc.GetAllocatedResource())
 		sa.maxAllocatedResource = resources.ComponentWiseMax(sa.allocatedResource, sa.maxAllocatedResource)
 	}
 	sa.appEvents.SendNewAllocationEvent(sa.ApplicationID, alloc.allocationKey, alloc.GetAllocatedResource())
+	//更新申请到的资源列表
 	sa.allocations[alloc.GetAllocationKey()] = alloc
 }
 
@@ -1849,6 +1855,7 @@ func (sa *Application) ReplaceAllocation(allocationKey string) *Allocation {
 	alloc.SetPlaceholderUsed(true)
 	alloc.SetPlaceholderCreateTime(ph.GetCreateTime())
 	alloc.SetBindTime(time.Now())
+	//执行替换进行标记
 	sa.addAllocationInternal(Replaced, alloc)
 	// order is important: clean up the allocation after adding it to the app
 	// we need the original Replaced allocation resultType.
