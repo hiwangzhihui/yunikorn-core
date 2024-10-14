@@ -65,11 +65,11 @@ const (
 )
 
 type PlaceholderData struct {
-	TaskGroupName string
-	Count         int64
+	TaskGroupName string //预占分组名称
+	Count         int64  //总的预占资源个数
 	MinResource   *resources.Resource
-	Replaced      int64
-	TimedOut      int64
+	Replaced      int64 //替换的预占资源个数
+	TimedOut      int64 //超时的预占资源个数
 }
 
 type StateLogEntry struct {
@@ -84,11 +84,12 @@ type Application struct {
 	tags           map[string]string // application tags used in scheduling
 
 	// Private mutable fields need protection
-	queuePath    string
-	queue        *Queue                  // queue the application is running in
+	queuePath string
+	queue     *Queue // queue the application is running in
+	//pending 的资源需求
 	pending      *resources.Resource     // pending resources from asks for the app
 	reservations map[string]*reservation // a map of reservations
-	//core 记录的资源请求
+	//core 记录的资源请求，包含申请到的资源和pending 的资源
 	requests map[string]*Allocation // a map of allocations, pending or satisfied
 	//资源请求排序列表
 	sortedRequests sortedRequests     // list of requests pre-sorted
@@ -100,24 +101,26 @@ type Application struct {
 	preemptedResource   *resources.TrackedResource // keep track of preempted resource usage of the application
 	placeholderResource *resources.TrackedResource // keep track of placeholder resource usage of the application
 
-	maxAllocatedResource *resources.Resource         // max allocated resources
-	allocatedPlaceholder *resources.Resource         // total allocated placeholder resources
-	allocations          map[string]*Allocation      // list of all satisfied allocations
-	placeholderAsk       *resources.Resource         // total placeholder request for the app (all task groups)
-	stateMachine         *fsm.FSM                    // application state machine
-	stateTimer           *time.Timer                 // timer for state time
-	execTimeout          time.Duration               // execTimeout for the application run
-	placeholderTimer     *time.Timer                 // placeholder replace timer
-	gangSchedulingStyle  string                      // gang scheduling style can be hard (after timeout we fail the application), or soft (after timeeout we schedule it as a normal application)
-	startTime            time.Time                   // the time that the application starts running. Default is zero.
-	finishedTime         time.Time                   // the time of finishing this application. the default value is zero time
-	rejectedMessage      string                      // If the application is rejected, save the rejected message
-	stateLog             []*StateLogEntry            // state log for this application
-	placeholderData      map[string]*PlaceholderData // track placeholder and gang related info
-	askMaxPriority       int32                       // highest priority value of outstanding asks
-	hasPlaceholderAlloc  bool                        // Whether there is at least one allocated placeholder
-	runnableInQueue      bool                        // whether the application is runnable/schedulable in the queue. Default is true.
-	runnableByUserLimit  bool                        // whether the application is runnable/schedulable based on user/group quota. Default is true.
+	maxAllocatedResource *resources.Resource // max allocated resources
+	//已经申请到的 Placeholder 资源请求
+	allocatedPlaceholder *resources.Resource    // total allocated placeholder resources
+	allocations          map[string]*Allocation // list of all satisfied allocations
+	placeholderAsk       *resources.Resource    // total placeholder request for the app (all task groups)
+	stateMachine         *fsm.FSM               // application state machine
+	stateTimer           *time.Timer            // timer for state time
+	//预占超时时间和定时器
+	execTimeout         time.Duration               // execTimeout for the application run
+	placeholderTimer    *time.Timer                 // placeholder replace timer
+	gangSchedulingStyle string                      // gang scheduling style can be hard (after timeout we fail the application), or soft (after timeeout we schedule it as a normal application)
+	startTime           time.Time                   // the time that the application starts running. Default is zero.
+	finishedTime        time.Time                   // the time of finishing this application. the default value is zero time
+	rejectedMessage     string                      // If the application is rejected, save the rejected message
+	stateLog            []*StateLogEntry            // state log for this application
+	placeholderData     map[string]*PlaceholderData // track placeholder and gang related info
+	askMaxPriority      int32                       // highest priority value of outstanding asks
+	hasPlaceholderAlloc bool                        // Whether there is at least one allocated placeholder
+	runnableInQueue     bool                        // whether the application is runnable/schedulable in the queue. Default is true.
+	runnableByUserLimit bool                        // whether the application is runnable/schedulable based on user/group quota. Default is true.
 
 	rmEventHandler        handler.EventHandler
 	rmID                  string
@@ -462,15 +465,19 @@ func (sa *Application) timeoutPlaceholderProcessing() {
 				zap.String("currentState", sa.CurrentState()),
 				zap.Error(err))
 		}
+		//向量 k8s-shim 发送释放资源请求，原因为 TIMEOUT
 		sa.notifyRMAllocationReleased(sa.getAllRequestsInternal(), si.TerminationType_TIMEOUT, "releasing placeholders asks on placeholder timeout")
+		//清理所有资源请求
 		sa.removeAsksInternal("", si.EventRecord_REQUEST_TIMEOUT)
 		// all allocations are placeholders but GetAllAllocations is locked and cannot be used
 		sa.notifyRMAllocationReleased(sa.getPlaceholderAllocations(), si.TerminationType_TIMEOUT, "releasing allocated placeholders on placeholder timeout")
 		// we are in an accepted or new state so nothing can be replaced yet: mark everything as timedout
+		//更新资源统计
 		for _, phData := range sa.placeholderData {
-			phData.TimedOut = phData.Count
+			phData.TimedOut = phData.Count //所有 hp 请求，都归纳为 TimedOut 类型
 		}
 	}
+
 	sa.clearPlaceholderTimer()
 }
 
@@ -650,7 +657,7 @@ func (sa *Application) AddAllocationAsk(ask *Allocation) error {
 	// 1) first ask added on a new app: state is New
 	// 2) all asks and allocation have been removed: state is Completing
 	// Move the state and get it scheduling (again)
-	//app 状态检查，如实是 New 或 Completing 状态不会为其调度
+	//app 状态检查，如果是 New、 Completing 状态，会触发 RunApplication 事件，驱动状态转换
 	if sa.stateMachine.Is(New.String()) || sa.stateMachine.Is(Completing.String()) {
 		if err := sa.HandleApplicationEvent(RunApplication); err != nil {
 			log.Log(log.SchedApplication).Debug("Application state change failed while adding new ask",
@@ -658,6 +665,7 @@ func (sa *Application) AddAllocationAsk(ask *Allocation) error {
 				zap.Error(err))
 		}
 	}
+	//添加资源请求到request 列表中
 	sa.addAllocationAskInternal(ask)
 
 	// Update total pending resource
@@ -798,10 +806,10 @@ func (sa *Application) DeallocateAsk(allocKey string) (*resources.Resource, erro
 }
 
 func (sa *Application) allocateAsk(ask *Allocation) (*resources.Resource, error) {
-	if !ask.allocate() {
+	if !ask.allocate() { //更新 Request 的请求资源状态
 		return nil, fmt.Errorf("unable to allocate previously allocated ask %s on app %s", ask.GetAllocationKey(), sa.ApplicationID)
 	}
-
+	//更新 App 资源统计
 	if ask.GetPriority() >= sa.askMaxPriority {
 		// recalculate downward
 		sa.updateAskMaxPriority()
@@ -1199,14 +1207,16 @@ func (sa *Application) cancelReservations(reservations []*reservation) bool {
 func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, getNodeFn func(string) *Node) *AllocationResult {
 	sa.Lock()
 	defer sa.Unlock()
-	// nothing to do if we have no placeholders allocated
+	// nothing to do if we have no placeholders allocated  如果allocatedPlaceholder 没有值，则直接返回
 	if resources.IsZero(sa.allocatedPlaceholder) || sa.sortedRequests == nil {
 		return nil
 	}
 	// keep the first fits for later
-	var phFit *Allocation
-	var reqFit *Allocation
+	//为 App 的 Pending_req 资源找到一个 Placeholder 资源进行替换
+	var phFit *Allocation  // 预占资源
+	var reqFit *Allocation //req 资源
 	// get all the requests from the app sorted in order
+	//首先进行 TaskGroup 资源匹配，todo 可以优化双重循环及其不友好
 	for _, request := range sa.sortedRequests {
 		// skip placeholders they follow standard allocation
 		// this should also be part of a task group just make sure it is
@@ -1237,12 +1247,15 @@ func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, 
 				// release the placeholder and tell the RM
 				ph.SetReleased(true)
 				//todo 不是 TerminationType_TIMEOUT 导致失败，不能乱填
+				//todo 如果是 Hard 模式则任务直接失败&&如果是 soft 则退化即可
+				//todo 在K8s 事件中打印记录该信息
 				sa.notifyRMAllocationReleased([]*Allocation{ph}, si.TerminationType_TIMEOUT, "cancel placeholder: resource incompatible")
 				sa.appEvents.SendPlaceholderLargerEvent(ph.taskGroupName, sa.ApplicationID, ph.allocationKey, request.GetAllocatedResource(), ph.GetAllocatedResource())
 				continue
 			}
 			// placeholder is the same or larger continue processing and difference is handled when the placeholder
 			// is swapped with the real one.
+			//给匹配的请求和预占资源，赋值
 			if phFit == nil && reqFit == nil {
 				phFit = ph
 				reqFit = request
@@ -1250,7 +1263,9 @@ func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, 
 			node := getNodeFn(ph.GetNodeID()) //ph已经分配到资源
 			// got the node run same checks as for reservation (all but fits)
 			// resource usage should not change anyway between placeholder and real one at this point
+			//TODO  进行资源预先检查，如果预选失败怎么处理？
 			if node != nil && node.preReserveConditions(request) == nil {
+				//通过资源预选，更新 request 资源状态为 allocated、并更新 App 的资源统计
 				_, err := sa.allocateAsk(request)
 				if err != nil {
 					log.Log(log.SchedApplication).Warn("allocation of ask failed unexpectedly",
@@ -1262,12 +1277,13 @@ func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, 
 				request.SetRelease(ph)
 				// placeholder point to the real one in the releases list
 				ph.SetRelease(request)
-				// mark placeholder as released
+				// mark placeholder as released 更新释放笔记
 				ph.SetReleased(true)
 				// bind node here so it will be handled properly upon replacement
 				request.SetBindTime(time.Now())
 				request.SetNodeID(node.NodeID)
 				request.SetInstanceType(node.GetInstanceType())
+				//发送一个资源替换请求，一个 Replaced 事件
 				return newReplacedAllocationResult(node.NodeID, request)
 			}
 		}
@@ -1280,7 +1296,7 @@ func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, 
 	// we checked all placeholders and asks nothing worked as yet
 	// pick the first fit and try all nodes if that fails give up
 	var allocResult *AllocationResult
-	if phFit != nil && reqFit != nil {
+	if phFit != nil && reqFit != nil { //todo preReserveConditions 如果预选失败则可能会进入该逻辑, 遍历其它可用节点去获取 reqFit 的资源分配
 		iterator.ForEachNode(func(node *Node) bool {
 			if !node.IsSchedulable() {
 				log.Log(log.SchedApplication).Debug("skipping node for placeholder ask as state is unschedulable",
@@ -1297,7 +1313,7 @@ func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, 
 			}
 			// update just the node to make sure we keep its spot
 			// no queue update as we're releasing the placeholder and are just temp over the size
-			if !node.TryAddAllocation(reqFit) {
+			if !node.TryAddAllocation(reqFit) { //尝试在该节点分配资源
 				log.Log(log.SchedApplication).Debug("Node update failed unexpectedly",
 					zap.String("applicationID", sa.ApplicationID),
 					zap.Stringer("ask", reqFit),
@@ -1322,7 +1338,7 @@ func (sa *Application) tryPlaceholderAllocate(nodeIterator func() NodeIterator, 
 			phFit.SetReleased(true)
 			// bind node here so it will be handled properly upon replacement
 			reqFit.SetBindTime(time.Now())
-			reqFit.SetNodeID(node.NodeID)
+			reqFit.SetNodeID(node.NodeID) //todo 找到其它服务需求的节点
 			reqFit.SetInstanceType(node.GetInstanceType())
 			result := newReplacedAllocationResult(node.NodeID, reqFit)
 
@@ -1750,7 +1766,7 @@ func (sa *Application) addAllocationInternal(allocType AllocationResultType, all
 		// impact on what is happening until this point
 		if resources.IsZero(sa.allocatedPlaceholder) {
 			sa.hasPlaceholderAlloc = true
-			sa.initPlaceholderTimer()
+			sa.initPlaceholderTimer() //为 gang 调度任务设置定时器
 		}
 		// User resource usage needs to be updated even during resource allocation happen for ph's itself even though state change would happen only after all ph allocation completes.
 		sa.incUserResourceUsage(alloc.GetAllocatedResource())
@@ -1851,15 +1867,15 @@ func (sa *Application) ReplaceAllocation(allocationKey string) *Allocation {
 	// update the replacing allocation
 	// we double linked the real and placeholder allocation
 	// ph is the placeholder, the releases entry points to the real one
-	alloc := ph.GetRelease()
+	alloc := ph.GetRelease() //为释放 ph 找到对应的 OrgAlloc 并绑定
 	alloc.SetPlaceholderUsed(true)
 	alloc.SetPlaceholderCreateTime(ph.GetCreateTime())
 	alloc.SetBindTime(time.Now())
-	//执行替换进行标记
+	//执行替换进行标记，进行资源扣减更新 App 资源信息
 	sa.addAllocationInternal(Replaced, alloc)
 	// order is important: clean up the allocation after adding it to the app
 	// we need the original Replaced allocation resultType.
-	alloc.ClearRelease()
+	alloc.ClearRelease() //取消关联
 	if sa.placeholderData != nil {
 		sa.placeholderData[ph.GetTaskGroup()].Replaced++
 	}

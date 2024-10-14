@@ -64,14 +64,19 @@ type Allocation struct {
 	headroomCheckFailed  bool
 
 	// Fields used once an allocation is bound
-	nodeID                string      // the node this allocation is bound to
-	bindTime              time.Time   // the time this allocation was bound to a node
-	placeholderUsed       bool        // whether a placeholder was used for this allocation
-	placeholderCreateTime time.Time   // the time the placeholder was created, if any
-	released              bool        // whether this allocation has been released (for placeholders)
-	release               *Allocation // placeholder to be released for this allocation
-	preempted             bool        // whether this allocation has been marked for preemption
-	instType              string      // the instance type of the node at the time this allocation was bound
+	//分配到的 NodeId
+	nodeID string // the node this allocation is bound to
+	//core 中分配到资源的时间
+	bindTime time.Time // the time this allocation was bound to a node
+	//core orgAlloc 替换绑定成功则标记为true
+	placeholderUsed       bool      // whether a placeholder was used for this allocation
+	placeholderCreateTime time.Time // the time the placeholder was created, if any
+	//placeholdersAsk 替换标记
+	released bool // whether this allocation has been released (for placeholders)
+	// placeholderAask 绑定的是 orgReqestAsk，  orgReqestAsk 绑定的是 placeholderAask
+	release   *Allocation // placeholder to be released for this allocation
+	preempted bool        // whether this allocation has been marked for preemption
+	instType  string      // the instance type of the node at the time this allocation was bound
 
 	locking.RWMutex
 }

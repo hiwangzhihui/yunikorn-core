@@ -146,8 +146,8 @@ func (cc *ClusterContext) schedule() bool {
 		if result != nil {
 			//指标统计
 			metrics.GetSchedulerMetrics().ObserveSchedulingLatency(schedulingStart)
-			if result.ResultType == objects.Replaced {
-				// communicate the removal to the RM
+			if result.ResultType == objects.Replaced { //如果申请到资源是预占替换，则发送
+				// communicate the removal to the RM   //发生送请求释放预占的资源
 				cc.notifyRMAllocationReleased(psc.RmID, psc.Name, []*objects.Allocation{result.Request.GetRelease()}, si.TerminationType_PLACEHOLDER_REPLACED, "replacing allocationKey: "+result.Request.GetAllocationKey())
 			} else {
 				//调度成功，发送通知，回调 Shim   , Allocated
@@ -719,9 +719,10 @@ func (cc *ClusterContext) updateNode(nodeInfo *si.NodeInfo) {
 func (cc *ClusterContext) handleRMUpdateAllocationEvent(event *rmevent.RMUpdateAllocationEvent) {
 	request := event.Request
 	if len(request.Allocations) != 0 {
-		//开始资源调度
+		// 处理资源申请请求
 		cc.processAllocations(request)
 	}
+	//处理资源释放请求
 	if request.Releases != nil {
 		if len(request.Releases.AllocationsToRelease) > 0 {
 			cc.processAllocationReleases(request.Releases.AllocationsToRelease, request.RmID)
@@ -751,7 +752,7 @@ func (cc *ClusterContext) processAllocations(request *si.AllocationRequest) {
 			})
 			continue
 		}
-
+		//资源请求对象转换为 core的 Allocation
 		alloc := objects.NewAllocationFromSI(siAlloc)
 
 		_, newAlloc, err := partition.UpdateAllocation(alloc)
@@ -794,7 +795,7 @@ func (cc *ClusterContext) processAllocationReleases(releases []*si.AllocationRel
 				cc.notifyRMAllocationReleased(rmID, partition.Name, allocs, si.TerminationType_STOPPED_BY_RM, "allocation remove as per RM request")
 			}
 			// notify the RM of the confirmed allocations (placeholder swap & preemption)
-			//确认替换的资源通知到 Shim  (placeholder swap & preemption)
+			//confirmed orgAlloc 确认替换的资源通知到 Shim  (placeholder swap & preemption)
 			if confirmed != nil {
 				cc.notifyRMNewAllocation(rmID, confirmed)
 			}
@@ -831,7 +832,7 @@ func (cc *ClusterContext) notifyRMAllocationReleased(rmID string, partitionName 
 		RmID:                rmID,
 		Channel:             c,
 	}
-	for _, alloc := range released {
+	for _, alloc := range released { //待释放的资源列表
 		releaseEvent.ReleasedAllocations = append(releaseEvent.ReleasedAllocations, &si.AllocationRelease{
 			ApplicationID:   alloc.GetApplicationID(),
 			PartitionName:   partitionName,

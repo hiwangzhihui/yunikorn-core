@@ -136,7 +136,9 @@ func (rmp *RMProxy) processRMReleaseAllocationEvent(event *rmevent.RMReleaseAllo
 		response := &si.AllocationResponse{
 			Released: event.ReleasedAllocations,
 		}
+		//处理要释放的资源，向shim 层发送请求
 		rmp.triggerUpdateAllocation(event.RmID, response)
+		//更新指标统计
 		metrics.GetSchedulerMetrics().AddReleasedContainers(len(event.ReleasedAllocations))
 	}
 
@@ -271,12 +273,12 @@ func (rmp *RMProxy) UpdateAllocation(request *si.AllocationRequest) error {
 	if rmp.GetResourceManagerCallback(request.RmID) == nil {
 		return fmt.Errorf("received AllocationRequest, but RmID=\"%s\" not registered", request.RmID)
 	}
-	// Update allocations
+	// Update allocations  处理资源请求
 	for _, alloc := range request.Allocations {
 		alloc.PartitionName = common.GetNormalizedPartitionName(alloc.PartitionName, request.RmID)
 	}
 
-	// Update releases
+	// Update releases 处理资源释放请求
 	if request.Releases != nil {
 		for _, rel := range request.Releases.AllocationsToRelease {
 			rel.PartitionName = common.GetNormalizedPartitionName(rel.PartitionName, request.RmID)

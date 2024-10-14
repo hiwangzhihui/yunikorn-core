@@ -837,11 +837,12 @@ func (pc *PartitionContext) tryPlaceholderAllocate() *objects.AllocationResult {
 	if pc.getPhAllocationCount() == 0 {
 		return nil
 	}
+	//如果没有资源需求，则直接返回
 	if !resources.StrictlyGreaterThanZero(pc.root.GetPendingResource()) {
 		// nothing to do just return
 		return nil
 	}
-	// try allocating from the root down
+	// try allocating from the root down 从 Partition 的 root 队列开始递归触发预占替换
 	result := pc.root.TryPlaceholderAllocate(pc.GetNodeIterator, pc.GetNode)
 	if result != nil {
 		log.Log(log.SchedPartition).Info("scheduler replace placeholder processed",
@@ -1173,7 +1174,7 @@ func (pc *PartitionContext) UpdateAllocation(alloc *objects.Allocation) (request
 	existing := app.GetAllocationAsk(allocationKey)
 
 	// handle new allocation
-	if existing == nil {
+	if existing == nil { //向 App 添加新的资源请求
 		// new request
 		if node == nil {
 			log.Log(log.SchedPartition).Info("handling new request",
@@ -1352,7 +1353,7 @@ func (pc *PartitionContext) generateReleased(release *si.AllocationRelease, app 
 			log.Log(log.SchedPartition).Info("replacing placeholder allocation",
 				zap.String("appID", app.ApplicationID),
 				zap.String("allocationKey", allocationKey))
-			//执行替换
+			//执行替换，返回Ph
 			if alloc := app.ReplaceAllocation(allocationKey); alloc != nil {
 				released = append(released, alloc)
 			}
@@ -1389,6 +1390,7 @@ func (pc *PartitionContext) removeAllocation(release *si.AllocationRelease) ([]*
 	}
 
 	// temp store for allocations manipulated 替换在这个逻辑中完成，App
+	//给 orgAlloc 更新信息和 App 信息，返回 Ph
 	released := pc.generateReleased(release, app)
 	var confirmed *objects.Allocation
 
@@ -1418,8 +1420,8 @@ func (pc *PartitionContext) removeAllocation(release *si.AllocationRelease) ([]*
 		}
 		//在释放 phTask 资源，并进行指标统计同步
 		if release.TerminationType == si.TerminationType_PLACEHOLDER_REPLACED {
-			confirmed = alloc.GetRelease()
-			// we need to check the resources equality
+			confirmed = alloc.GetRelease() //confirmed 为 orgAlloc
+			// we need to check the resources equality  计算实际值和预占差值
 			delta := resources.Sub(confirmed.GetAllocatedResource(), alloc.GetAllocatedResource())
 			// Any negative value in the delta means that at least one of the requested resource in the
 			// placeholder is larger than the real allocation. The node and queue need adjusting.

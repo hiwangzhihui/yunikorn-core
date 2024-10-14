@@ -1462,7 +1462,9 @@ func (sq *Queue) TryAllocate(iterator func() NodeIterator, fullIterator func() N
 func (sq *Queue) TryPlaceholderAllocate(iterator func() NodeIterator, getnode func(string) *Node) *AllocationResult {
 	if sq.IsLeafQueue() {
 		// process the apps (filters out app without pending requests)
+		//先对
 		for _, app := range sq.sortApplications(true) {
+			//绑定成功一个就会立即返回一个 Replaced 结果
 			result := app.tryPlaceholderAllocate(iterator, getnode)
 			if result != nil {
 				log.Log(log.SchedQueue).Info("allocation found on queue",
